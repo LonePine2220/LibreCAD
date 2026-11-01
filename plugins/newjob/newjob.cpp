@@ -277,7 +277,10 @@ QByteArray JobBuilder::fetch(const QString &baseUrl, const QList<QPair<QString, 
         req.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
         reply = nam.post(req, q);
     } else {
-        req.setUrl(QUrl::fromEncoded(baseUrl.toUtf8() + '?' + q));
+        QByteArray full = baseUrl.toUtf8();
+        full += '?';
+        full += q;
+        req.setUrl(QUrl::fromEncoded(full));
         reply = nam.get(req);
     }
     QEventLoop loop;
@@ -611,7 +614,7 @@ void JobBuilder::drawFlood(const QRectF &site, const Parcel &subject)
         Poly g = readRings(f.value("geometry").toObject());
         if (g.isEmpty()) continue;
         bool minimal = (zone == "X" && !sub.contains("0.2"));
-        QString label = (zone == "X" && sub.contains("0.2")) ? QString("SHADED ZONE X") : "ZONE " + zone;
+        QString label = (zone == "X" && sub.contains("0.2")) ? QString("SHADED ZONE X") : QString("ZONE " + zone);
         if (zone == "X" && minimal) label = "ZONE X";
         if (polysIntersect(g, subject.geom)) subjectZones.insert(label);
         if (minimal) continue;   // don't outline the "minimal hazard" background

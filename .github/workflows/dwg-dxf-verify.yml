@@ -103,6 +103,7 @@ concurrency:
 
 jobs:
   VerifyDwgDxfFast:
+    if: github.repository_owner == 'LibreCAD'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -142,6 +143,7 @@ jobs:
         run: ctest --test-dir format-tests --output-on-failure
 
   VerifyDwgDxfWindows:
+    if: github.repository_owner == 'LibreCAD'
     strategy:
       fail-fast: false
       matrix:

@@ -11,6 +11,7 @@ QT += widgets
 
 SUBDIRS     = \
         asciifile \
+        newjob \
         align \
         divide \
         list \

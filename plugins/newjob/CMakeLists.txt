@@ -1,0 +1,40 @@
+set(PLUGIN_NAME newjob)
+
+qt_add_plugin(
+    ${PLUGIN_NAME}
+    SHARED
+    ${PLUGIN_HEADERS}
+    newjob.cpp
+    newjob.h
+    newjob_geom.h
+)
+
+#qt_add_translations(${PLUGIN_NAME} TS_FILE_DIR ../ts TS_FILES ${PLUGIN_TS_FILES})
+install(TARGETS ${PLUGIN_NAME}
+    BUNDLE DESTINATION ${LIBRECAD_PLUGIN_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIBRECAD_PLUGIN_INSTALL_DIR})
+
+set_target_properties(
+    ${PLUGIN_NAME}
+    PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
+)
+
+ target_compile_definitions(${PLUGIN_NAME} PRIVATE
+ DWGSUPPORT
+ MUPARSER_STATIC
+)
+
+target_link_libraries(
+    ${PLUGIN_NAME}
+    PRIVATE
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Network
+)
+
+if(WIN32)
+    SET(RC_SOURCE plugin.rc)
+    target_sources( ${PLUGIN_NAME} PRIVATE ${RC_SOURCE})
+endif()

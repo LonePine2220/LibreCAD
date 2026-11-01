@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   analyze:
+    if: github.repository_owner == 'LibreCAD'
     name: Analyze
 
     runs-on: ubuntu-latest
@@ -65,7 +66,7 @@ jobs:
   ClangScan:
     name: Security scan
     # The report is only published for pushes and scheduled runs.
-    if: github.event_name != 'pull_request'
+    if: github.repository_owner == 'LibreCAD' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

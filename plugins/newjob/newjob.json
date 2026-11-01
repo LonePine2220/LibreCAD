@@ -1,0 +1,11 @@
+{
+    "IID": "org.librecad.PluginInterface/1.0",
+    "MetaData": {
+        "Name": "New Job",
+        "Description": "Starts a survey job: NC OneMap subject parcel and adjoiners, FEMA flood zones, and a vicinity map",
+        "Version": "1.0",
+        "License": "GPL-2.0-or-later",
+        "Category": "Import",
+        "Keys": ["parcel", "gis", "flood", "vicinity"]
+    }
+}

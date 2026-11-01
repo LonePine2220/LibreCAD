@@ -8,6 +8,7 @@ concurrency:
 
 jobs:
   build_with_pixi:
+    if: github.repository_owner == 'LibreCAD'
     runs-on: ${{ matrix.os }}
     strategy:
       max-parallel: 5

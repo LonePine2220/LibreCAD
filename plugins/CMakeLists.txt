@@ -99,6 +99,7 @@ set(PLUGIN_TS_FILES
    )
 
 add_subdirectory(asciifile)
+add_subdirectory(newjob)
 add_subdirectory(align)
 add_subdirectory(divide)
 add_subdirectory(list)

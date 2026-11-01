@@ -69,8 +69,9 @@ private:
     void procesfileNormal(QFile* file, QString sep, QString::SplitBehavior skip = QString::KeepEmptyParts);
 #endif
     void drawLine() const;
-    void draw2D() const;
-    void draw3D() const;
+    void drawPoints(const pointBox *box) const;
+    QString codeKey(const PointData *pd) const;
+    QString layerFor(const PointData *pd, const QString &baseLayer) const;
     void drawNumber();
     void drawElev();
     void drawCode();
@@ -88,7 +89,13 @@ private:
     QLineEdit *fileedit;
     QComboBox *formatedit;
     QCheckBox *connectPoints;
+    QComboBox *columnorder;
+    QCheckBox *layerbycode;
+    QLineEdit *layerprefix;
+    QCheckBox *blockbycode;
+    QLineEdit *blockscale;
     QList<PointData*> dataList;
+    int skippedLines = 0;
 
     Document_Interface *currDoc;
 

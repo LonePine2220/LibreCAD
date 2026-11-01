@@ -25,6 +25,8 @@
 #include <QSettings>
 
 #include <QMessageBox>
+#include <QRegularExpression>
+#include <QMap>
 
 #include "asciifile.h"
 
@@ -242,6 +244,29 @@ dibPunto::dibPunto(QWidget *parent) :  QDialog(parent)
     loformat->addWidget(connectPoints);
     mainLayout->addLayout(loformat, 0, 1);
 
+    QGroupBox *surveybox = new QGroupBox(tr("Survey options"));
+    QGridLayout *losurvey = new QGridLayout;
+    losurvey->addWidget(new QLabel(tr("Column order:")), 0, 0);
+    columnorder = new QComboBox();
+    columnorder->addItems(QStringList() << tr("P,N,E,Z,D (PNEZD)") << tr("P,E,N,Z,D (PENZD)"));
+    losurvey->addWidget(columnorder, 0, 1);
+    layerbycode = new QCheckBox(tr("Put points on layers by description code"));
+    losurvey->addWidget(layerbycode, 1, 0, 1, 2);
+    losurvey->addWidget(new QLabel(tr("Layer prefix:")), 1, 2);
+    layerprefix = new QLineEdit();
+    layerprefix->setToolTip(tr("Prepended to the code to form the layer name, e.g. PNT- gives PNT-IPF"));
+    losurvey->addWidget(layerprefix, 1, 3);
+    blockbycode = new QCheckBox(tr("Insert block named after code when it exists in the drawing"));
+    losurvey->addWidget(blockbycode, 2, 0, 1, 2);
+    losurvey->addWidget(new QLabel(tr("Block scale:")), 2, 2);
+    blockscale = new QLineEdit();
+    QDoubleValidator *scaleval = new QDoubleValidator(0);
+    scaleval->setBottom(0.0);
+    blockscale->setValidator(scaleval);
+    losurvey->addWidget(blockscale, 2, 3);
+    surveybox->setLayout(losurvey);
+    mainLayout->addWidget(surveybox, 1, 0, 1, 2);
+
     pt2d = new pointBox(tr("2D Point"),tr("Draw 2D Point"));
     pt3d = new pointBox(tr("3D Point"),tr("Draw 3D Point"));
     ptnumber = new textBox(tr("Point Number"),tr("Draw point number"));
@@ -253,23 +278,23 @@ dibPunto::dibPunto(QWidget *parent) :  QDialog(parent)
 
     lo2d3d->addWidget(pt2d);
     lo2d3d->addWidget(pt3d);
-    mainLayout->addLayout(lo2d3d, 1, 0);
+    mainLayout->addLayout(lo2d3d, 2, 0);
 
-    mainLayout->addWidget(ptnumber, 1, 1);
-    mainLayout->addWidget(ptelev, 2, 0);
-    mainLayout->addWidget(ptcode, 2, 1);
+    mainLayout->addWidget(ptnumber, 2, 1);
+    mainLayout->addWidget(ptelev, 3, 0);
+    mainLayout->addWidget(ptcode, 3, 1);
 
     QHBoxLayout *loaccept = new QHBoxLayout;
     QPushButton *acceptbut = new QPushButton(tr("Accept"));
     loaccept->addStretch();
     loaccept->addWidget(acceptbut);
-    mainLayout->addLayout(loaccept, 3, 0);
+    mainLayout->addLayout(loaccept, 4, 0);
 
     QPushButton *cancelbut = new QPushButton(tr("Cancel"));
     QHBoxLayout *locancel = new QHBoxLayout;
     locancel->addWidget(cancelbut);
     locancel->addStretch();
-    mainLayout->addLayout(locancel, 3, 1);
+    mainLayout->addLayout(locancel, 4, 1);
 
     setLayout(mainLayout);
     readSettings();
@@ -306,6 +331,9 @@ bool dibPunto::failGUI(QString *msg) const {
     if (pt3d->checkOn() == true) {
         if (pt3d->getLayer().isEmpty()) {msg->insert(0, tr("Point 3D layer is empty")); return true;}
     }
+    if (blockbycode->isChecked()) {
+        if (blockscale->text().isEmpty() || blockscale->text().toDouble() <= 0.0) {msg->insert(0, tr("Block scale must be greater than zero")); return true;}
+    }
     if (ptelev->checkOn() == true) {
         if (ptelev->getLayer().isEmpty()) {msg->insert(0, tr("Point elevation layer is empty")); return true;}
         if (ptelev->getHeightStr().isEmpty()) {msg->insert(0, tr("Point elevation height is empty")); return true;}
@@ -327,7 +355,6 @@ bool dibPunto::failGUI(QString *msg) const {
 void dibPunto::procesFile(Document_Interface *doc)
 {
     QString sep;
-    QMessageBox::information(this, "Info", "dibpunto procesFile");
     currDoc = doc;
 
 //Warning, can change adding or reordering "formatedit"
@@ -373,9 +400,9 @@ void dibPunto::procesFile(Document_Interface *doc)
     QString currlay = currDoc->getCurrentLayer();
 
     if (pt2d->checkOn() == true)
-        draw2D();
+        drawPoints(pt2d);
     if (pt3d->checkOn() == true)
-        draw3D();
+        drawPoints(pt3d);
     if (ptelev->checkOn() == true)
         drawElev();
     if (ptnumber->checkOn() == true)
@@ -387,6 +414,14 @@ void dibPunto::procesFile(Document_Interface *doc)
     /* draw lines in current layer */
     if ( connectPoints->isChecked() )
         drawLine();
+
+    int imported = 0;
+    for (const PointData *pd : std::as_const(dataList))
+        if (!pd->x.isEmpty() && !pd->y.isEmpty()) imported++;
+    QString summary = tr("Imported %1 points.").arg(imported);
+    if (skippedLines > 0)
+        summary += "\n" + tr("Skipped %1 lines that had no valid coordinates (headers, comments or bad rows).").arg(skippedLines);
+    QMessageBox::information(parentWidget(), tr("Read ascii points"), summary);
 
     currDoc = nullptr;
 
@@ -415,30 +450,47 @@ void dibPunto::drawLine() const {
     }
 }
 
-void dibPunto::draw2D() const {
-    QPointF pt;
-    currDoc->setLayer(pt2d->getLayer());
-    for (int i = 0; i < dataList.size(); ++i) {
-        PointData *pd = dataList.at(i);
-        if (!pd->x.isEmpty() && !pd->y.isEmpty()){
-            pt.setX(pd->x.toDouble());
-            pt.setY(pd->y.toDouble());
-            currDoc->addPoint(&pt);
-        }
-    }
+QString dibPunto::codeKey(const PointData *pd) const {
+    // First word of the description is the code, e.g. "IPF 1/2 REBAR" -> "IPF"
+    QString code = pd->code.trimmed();
+    if (code.isEmpty()) return QString();
+    return code.section(QRegularExpression("[\\s,;]+"), 0, 0).toUpper();
 }
-void dibPunto::draw3D() const {
+
+QString dibPunto::layerFor(const PointData *pd, const QString &baseLayer) const {
+    if (!layerbycode->isChecked()) return baseLayer;
+    QString key = codeKey(pd);
+    if (key.isEmpty()) return baseLayer;
+    QString name = layerprefix->text().trimmed() + key;
+    // Characters not allowed in DXF/DWG layer names
+    name.replace(QRegularExpression("[<>/\\\\\":;?*|=`,]"), "_");
+    return name;
+}
+
+void dibPunto::drawPoints(const pointBox *box) const {
+    QMap<QString, QString> blocks; // upper-case name -> actual block name
+    if (blockbycode->isChecked()) {
+        const QStringList all = currDoc->getAllBlocks();
+        for (const QString &b : all) blocks.insert(b.toUpper(), b);
+    }
+    const double bs = blockscale->text().toDouble();
+    QString activeLayer;
     QPointF pt;
-    currDoc->setLayer(pt3d->getLayer());
     for (int i = 0; i < dataList.size(); ++i) {
         PointData *pd = dataList.at(i);
-        if (!pd->x.isEmpty() && !pd->y.isEmpty()){
-            pt.setX(pd->x.toDouble());
-            pt.setY(pd->y.toDouble());
-/*RLZ:3d support            if (pd->z.isEmpty()) pt.setZ(0.0);
-            else  pt.setZ(pd->z.toDouble());*/
-            currDoc->addPoint(&pt);
+        if (pd->x.isEmpty() || pd->y.isEmpty()) continue;
+        QString lay = layerFor(pd, box->getLayer());
+        if (lay != activeLayer) {
+            currDoc->setLayer(lay);
+            activeLayer = lay;
         }
+        pt.setX(pd->x.toDouble());
+        pt.setY(pd->y.toDouble());
+        QString key = codeKey(pd);
+        if (!key.isEmpty() && blocks.contains(key))
+            currDoc->addInsert(blocks.value(key), pt, QPointF(bs, bs), 0.0);
+        else
+            currDoc->addPoint(&pt);
     }
 }
 
@@ -595,41 +647,41 @@ void dibPunto::procesfileNormal(QFile* file, QString sep, Qt::SplitBehaviorFlags
 void dibPunto::procesfileNormal(QFile* file, QString sep, QString::SplitBehavior skip)
 #endif
 {
-    //    QString outname, sep;
     QStringList data;
     PointData *pd;
+    const bool neOrder = (columnorder->currentIndex() == 0); // PNEZD
+    const QString joiner = (sep == ",") ? QString(", ") : QString(" ");
+    auto isNum = [](const QString &s) { bool ok = false; s.toDouble(&ok); return ok; };
+    skippedLines = 0;
     while (!file->atEnd()) {
-        QString line = file->readLine();
-		if(line.isEmpty()) continue;
-        line.remove ( line.size()-1, 1);
+        QString line = QString::fromUtf8(file->readLine());
+        // strip line endings (handles LF, CRLF and a last line with no newline)
+        while (line.endsWith('\n') || line.endsWith('\r')) line.chop(1);
+        if (line.startsWith(QChar(0xFEFF))) line.remove(0, 1); // UTF-8 BOM
+        if (line.trimmed().isEmpty()) continue;
+        if (line.trimmed().startsWith('#')) { skippedLines++; continue; }
         data = line.split(sep, skip);
-        pd = new PointData;
-        int i = 0;
-        switch(data.size()){
-        case 0:
-        case 1:
-            delete pd;
-            continue;
-
-            //allow reading in raw 2D ascii data in format:
-            // x y
-        case 2:
-            pd->x = data.at(0);
-            pd->y = data.at(1);
-            break;
-        default:
-        case 5:
-            pd->code=data.at(4);
-            // fall-through
-        case 4:
-            pd->z = data.at(3);
-            // fall-through
-        case 3:
-            pd->number = data.at(i);
-            pd->x = data.at(1);
-            pd->y = data.at(2);
-            break;
+        for (QString &s : data) {
+            s = s.trimmed();
+            if (s.size() >= 2 && s.startsWith('"') && s.endsWith('"')) s = s.mid(1, s.size() - 2);
         }
+        if (data.size() < 2) { skippedLines++; continue; }
+        pd = new PointData;
+        int c1 = 0, c2 = 1;            // 2-column file: N E or E N
+        if (data.size() >= 3) {
+            pd->number = data.at(0);
+            c1 = 1; c2 = 2;
+            if (data.size() >= 4) pd->z = data.at(3);
+            if (data.size() >= 5) pd->code = data.mid(4).join(joiner).trimmed();
+        }
+        if (neOrder) { pd->y = data.at(c1); pd->x = data.at(c2); }
+        else         { pd->x = data.at(c1); pd->y = data.at(c2); }
+        if (!isNum(pd->x) || !isNum(pd->y)) { // header row or garbage
+            delete pd;
+            skippedLines++;
+            continue;
+        }
+        if (!pd->z.isEmpty() && !isNum(pd->z)) pd->z.clear();
         dataList.append(pd);
     }
 }
@@ -650,6 +702,11 @@ void dibPunto::readSettings()
     fileedit->setText(str);
     formatedit->setCurrentIndex( settings.value("format", 0).toInt() );
     connectPoints->setChecked( settings.value("connectpoints", false).toBool() );
+    columnorder->setCurrentIndex( settings.value("columnorder", 0).toInt() );
+    layerbycode->setChecked( settings.value("layerbycode", true).toBool() );
+    layerprefix->setText( settings.value("layerprefix", "PNT-").toString() );
+    blockbycode->setChecked( settings.value("blockbycode", false).toBool() );
+    blockscale->setText( settings.value("blockscale", "1").toString() );
     pt2d->setCheck( settings.value("draw2d", false).toBool() );
     str = settings.value("layer2d").toString();
     pt2d->setLayer(str);
@@ -693,6 +750,11 @@ void dibPunto::writeSettings() const {
     settings.setValue("drawnumber", ptnumber->checkOn());
     settings.setValue("drawcode", ptcode->checkOn());
     settings.setValue("connectpoints", connectPoints->isChecked());
+    settings.setValue("columnorder", columnorder->currentIndex());
+    settings.setValue("layerbycode", layerbycode->isChecked());
+    settings.setValue("layerprefix", layerprefix->text());
+    settings.setValue("blockbycode", blockbycode->isChecked());
+    settings.setValue("blockscale", blockscale->text());
     settings.setValue("layer2d", pt2d->getLayer());
     settings.setValue("layer3d", pt3d->getLayer());
     settings.setValue("layerelev", ptelev->getLayer());

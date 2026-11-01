@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   BuildLinux:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository_owner == 'LibreCAD'
     runs-on: ubuntu-24.04
     outputs:
       output1: ${{ steps.artifact-upload-step.outputs.artifact-id }}
@@ -81,7 +81,7 @@ jobs:
           retention-days: 2
 
   BuildLinuxAarch64:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository_owner == 'LibreCAD'
     runs-on: ubuntu-24.04-arm
     outputs:
       output1: ${{ steps.artifact-upload-step.outputs.artifact-id }}
@@ -147,7 +147,7 @@ jobs:
           retention-days: 2
 
   BuildSnap:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository_owner == 'LibreCAD'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -257,7 +257,7 @@ jobs:
           retention-days: 2
 
   BuildWindows64:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository_owner == 'LibreCAD'
     runs-on: windows-2022
     outputs:
       output1: ${{ steps.artifact-upload-step.outputs.artifact-id }}
@@ -641,7 +641,7 @@ jobs:
           retention-days: 2
 
   PackageWindowsMsix:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository_owner == 'LibreCAD'
     needs: [BuildWindows64, BuildWindowsARM64]
     # x64, because the smoke test registers and runs the x64 package.
     # MakeAppx bundles any architecture.

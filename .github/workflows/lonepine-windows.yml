@@ -108,6 +108,11 @@ jobs:
           windeployqt6.exe --release --compiler-runtime Release\LibreCAD.exe
           cd ..
           xcopy /E /Y /I generated\Release windows
+          rem LibreCAD plugins (Read ASCII points, New Job, ...) go in resources\plugins next to the exe
+          if not exist windows\resources\plugins mkdir windows\resources\plugins
+          for /r generated\plugins %%f in (*.dll) do copy /Y "%%f" windows\resources\plugins\
+          if not exist windows\resources\plugins\newjob.dll exit /b 1
+          if not exist windows\resources\plugins\asciifile.dll exit /b 1
           for /r generated %%f in (librecad_*.qm) do copy "%%f" librecad\ts\
           for /r generated %%f in (plugins_*.qm) do copy "%%f" plugins\ts\
           powershell.exe -ExecutionPolicy Bypass -File scripts\copy-vc-runtime.ps1 -Architecture AMD64 -Destination windows

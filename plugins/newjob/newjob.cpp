@@ -92,7 +92,9 @@ void NewJobOptions::load()
     vicSize      = s.value("vicsize", 4.0).toDouble();
 
     s.beginGroup("services");
-    parcelUrl = s.value("parcels", "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer/0").toString();
+    parcelUrl = s.value("parcels", "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer/1").toString();
+    // Layer 0 of that service is parcel points; polygons are layer 1
+    if (parcelUrl.endsWith("NC1Map_Parcels/FeatureServer/0")) { parcelUrl.chop(1); parcelUrl += "1"; }
     floodUrl  = s.value("floodzones", "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28").toString();
     panelUrl  = s.value("firmpanels", "https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/3").toString();
     roadsUrl  = s.value("roads", "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer").toString();
@@ -362,12 +364,25 @@ QList<Parcel> JobBuilder::parseParcels(const QJsonObject &o) const
         p.geom = readRings(f.value("geometry").toObject());
         if (p.geom.isEmpty()) continue;
         p.owner = attr(a, {"ownname", "owner"});
-        p.pin = attr(a, {"pin", "nparno", "parno"});
-        p.pid = attr(a, {"pid", "altparno"});
+        p.pin = attr(a, {"parno", "pin"});
+        p.pid = attr(a, {"altparno", "pid"});
         p.book = attr(a, {"deedbook"});
         p.page = attr(a, {"deedpage"});
+        if (p.book.isEmpty() && p.page.isEmpty()) {
+            // NC OneMap carries the deed (when the county provides it) in sourceref,
+            // in county-specific formats: "1934/1970", "DB 1934 PG 1970", "1934-1970"...
+            QString ref = attr(a, {"sourceref"});
+            QRegularExpressionMatch m = QRegularExpression("^\\D*(\\d+)\\D+(\\d+)\\D*$").match(ref);
+            if (m.hasMatch()) { p.book = m.captured(1); p.page = m.captured(2); }
+            else if (!ref.isEmpty()) p.book = ref;   // shown as-is
+        }
         p.address = attr(a, {"siteadd"});
-        p.acres = attr(a, {"acres", "gisacres", "recareano"}).toDouble();
+        p.acres = attr(a, {"gisacres", "acres"}).toDouble();
+        if (p.acres <= 0) {   // some counties leave GIS acres at 0; compute from the shape
+            double sqft = 0;
+            for (const Ring &r : p.geom) sqft += ringArea(r);   // esri: holes run opposite to outer rings
+            p.acres = std::fabs(sqft) / 43560.0;
+        }
         out.append(p);
     }
     return out;
@@ -401,7 +416,7 @@ bool JobBuilder::findSubject(Parcel *subject)
     if (o.searchBy == 0) {
         QString v = sqlEsc(s);
         QString stripped = sqlEsc(QString(s).remove(QRegularExpression("[^0-9A-Z]")));
-        where = QString("(pin='%1' OR pid='%1' OR pin='%2' OR pid='%2')").arg(v, stripped);
+        where = QString("(parno='%1' OR altparno='%1' OR parno='%2' OR altparno='%2')").arg(v, stripped);
     } else {
         // "953 Hardin Dr" -> '%953%HARDIN%' (first two words, as stored upper case)
         QStringList w = s.split(QRegularExpression("[\\s,]+"), Qt::SkipEmptyParts);
@@ -409,7 +424,7 @@ bool JobBuilder::findSubject(Parcel *subject)
         where = QString("siteadd LIKE '%1'").arg(sqlEsc(pat));
     }
     if (!o.county.isEmpty())
-        where += QString(" AND UPPER(county) LIKE '%%1%'").arg(sqlEsc(o.county.toUpper()));
+        where += QString(" AND UPPER(cntyname) LIKE '%%1%'").arg(sqlEsc(o.county.toUpper()));
 
     QString err;
     QJsonObject res = query(o.parcelUrl + "/query", {
@@ -510,9 +525,11 @@ static QStringList parcelLines(const Parcel &p, bool subject)
 {
     QStringList l;
     l << p.owner;
-    if (!p.pin.isEmpty()) l << "PIN " + p.pin;
-    if (!p.book.isEmpty() || !p.page.isEmpty())
+    if (!p.pin.isEmpty()) l << "PARCEL " + p.pin;
+    if (!p.book.isEmpty() && !p.page.isEmpty())
         l << QString("DB %1 PG %2").arg(p.book, p.page);
+    else if (!p.book.isEmpty())
+        l << "DEED REF " + p.book;
     if (subject && p.acres > 0) l << QString("%1 AC (GIS)").arg(p.acres, 0, 'f', 3);
     return l;
 }
@@ -683,13 +700,27 @@ void JobBuilder::drawVicinity(const QRectF &site, const Parcel &subject)
     // Find the road layers by name so service re-numbering doesn't break us
     QString err;
     QJsonObject svc = query(o.roadsUrl, {{"f", "json"}}, &err);
+    // TIGERweb has each road class at several generalized scales
+    // ("Secondary Roads 578k scale", ...). Use one detailed layer per class.
     QList<int> roadLayers;
-    for (const QJsonValue &lv : svc.value("layers").toArray()) {
-        QJsonObject l = lv.toObject();
-        QString nm = l.value("name").toString();
-        if (nm.contains("Road", Qt::CaseInsensitive) && !nm.contains("Label", Qt::CaseInsensitive)
-            && l.value("subLayerIds").isNull())
-            roadLayers << l.value("id").toInt();
+    QSet<int> majorLayers;
+    const QJsonArray svcLayers = svc.value("layers").toArray();
+    for (const QString &cls : {QString("Primary Roads"), QString("Secondary Roads"), QString("Local Roads")}) {
+        int best = -1, bestScore = -1;
+        for (const QJsonValue &lv : svcLayers) {
+            QJsonObject l = lv.toObject();
+            QString nm = l.value("name").toString().trimmed();
+            if (!nm.startsWith(cls, Qt::CaseInsensitive) || nm.contains("Label", Qt::CaseInsensitive)) continue;
+            int score = 1;
+            if (nm.compare(cls, Qt::CaseInsensitive) == 0) score = 4;      // full detail
+            else if (nm.contains("72")) score = 3;                         // 1:72k, the most detailed generalized one
+            else if (nm.contains("Interstate", Qt::CaseInsensitive)) score = 0;
+            if (score > bestScore) { bestScore = score; best = l.value("id").toInt(); }
+        }
+        if (best >= 0) {
+            roadLayers << best;
+            if (!cls.startsWith("Local")) majorLayers.insert(best);
+        }
     }
     if (roadLayers.isEmpty()) {
         warnings << QObject::tr("Vicinity map roads unavailable: %1")
@@ -714,7 +745,7 @@ void JobBuilder::drawVicinity(const QRectF &site, const Parcel &subject)
             QString nm = attr(a, {"NAME"});
             if (nm.isEmpty()) nm = attr(a, {"BASENAME"});
             QString mtfcc = attr(a, {"MTFCC"});
-            bool major = mtfcc == "S1100" || mtfcc == "S1200";
+            bool major = majorLayers.contains(id) || mtfcc == "S1100" || mtfcc == "S1200";
             for (const Ring &pth : readRings(f.value("geometry").toObject(), "paths"))
                 for (const Path &piece : clipPath(pth, groundBox))
                     roads.append({nm.toUpper(), major, piece});
